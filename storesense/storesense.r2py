@@ -1,0 +1,320 @@
+"""
+<Program Name>
+  storesense.r2py
+
+<Started>
+  20 August 2014
+
+<Author>
+  Dennis Mirante (NYU)
+  Seth Miller (NYU)
+
+<Purpose>
+  This is a library for POSTing sensor data to a
+  website (sensevis.poly.edu) for backhauling.
+
+Example Use:
+  # In your program, import this library:
+  storesense = dy_import_module('storesense.r2py')
+
+  device_id = request_data(my_sensor_socket, 'getDeviceID', [])
+ 
+  # initialize the library  
+  storesense.init()
+  
+  data = []
+  measurements = {}
+  
+  # Collect some data...
+  for x in range(SAMPLE_SIZE):
+    measurements['gps'] = getLocation()
+    measurements['speed'] = getSpeed()
+    measurements['fuel_level'] = getFuelLevel()
+    measurements['fuel_consumption'] = getFuelConsumption()
+    # Each data entry needs a timestamp
+    entry = storesense.storesense_timestamp(measurements)
+    data.append(entry)
+    
+  priority = 0
+
+  storesense_post(data, device_id, 'mycollection', 'myusername', priority)
+   
+"""
+
+sensorlib = dy_import_module("sensorlib.r2py")
+urllib=dy_import_module("urllib.r2py")
+json = dy_import_module("json.r2py")
+dy_import_module_symbols("priority_queue.r2py")
+httpretrieve = dy_import_module("httpretrieve.r2py")
+time = dy_import_module("time.r2py")
+
+# initialize time module with a port
+time.time_updatetime(list(getresources()[0]['connport'])[0])
+
+# We are using a priority queue for buffer tracking
+_TX_QUEUE = PriorityQueue()
+
+# This lock is used to serialize access
+# to the transmit queue
+_TX_QUEUE_LOCK = createlock()
+
+# Look this over before finalizing - may want to do this as a class
+#mycontext['txqueuesize'] = 0
+
+
+POST_ACK          = 200
+POST_INCONSISTENT = 400
+POST_NOT_FOUND    = 404
+POST_INCOMPLETE   = 500
+
+
+MAX_RETRANSMITS = 3
+
+TX_INTERVAL_WAIT_TIME = 5
+
+#MAX_TX_BURST = 5
+
+# Start the buffer transmission thread execution
+def init():
+  mycontext['txqueuesize'] = 0
+  createthread( _sendbuffer )
+
+
+# Previews the next post entry
+# but leaves it in the queue
+def _preview_next_post():
+  # Acquire the lock first
+  _TX_QUEUE_LOCK.acquire(True)
+  try:
+    return _TX_QUEUE.getMinimum()
+  finally:
+    _TX_QUEUE_LOCK.release()
+
+
+# Returns the next post entry
+# removing it from the queue
+def _get_next_post():
+  # Acquire the lock first
+  _TX_QUEUE_LOCK.acquire(True)
+  try:
+    ent = _TX_QUEUE.deleteMinimum()
+    if ent is None:
+      mycontext['txqueuesize'] = 0
+    else:
+      mycontext['txqueuesize'] -= 1
+    return ent
+
+    #return _TX_QUEUE.deleteMinimum()
+  finally:
+    _TX_QUEUE_LOCK.release()
+
+
+# Places post entry on queue
+def _put_post( priority, data ):
+  # Acquire the lock first
+  _TX_QUEUE_LOCK.acquire(True)
+  try:
+    _TX_QUEUE.insert(priority, data)
+    mycontext['txqueuesize'] += 1
+  finally:
+    _TX_QUEUE_LOCK.release()
+
+
+# Gets the count of entries on the queue
+def _get_queue_sz():
+  # Acquire the lock first
+  _TX_QUEUE_LOCK.acquire(True)
+  try:
+    return mycontext['txqueuesize']
+  finally:
+    _TX_QUEUE_LOCK.release()
+
+
+# Combines all elements together to form data for post
+def _buildpostdata(data, device_id, collection, user):
+  # POSTs to sensevis must have the user's device id (IMEI number) 
+  # for differentiating end-user devices.  It also needs the sensor 
+  # data in JSON so it can be deserialized server-side.  Finally, the 
+  # post needs the name of which collection we're backhauling data into
+  # and the user it belongs to.
+  datastr = 'id=' + urllib.urllib_quote(device_id) + \
+      '&entries=' + urllib.urllib_quote(json.dumps(data)) + '&collection=' + urllib.urllib_quote(collection) + \
+      '&user=' + urllib.urllib_quote(user)
+
+  return datastr
+
+
+def process_reply( statusint, tx_bufcnt ):
+  # Process the response
+  
+  # Set retransmit default value
+  retransmit = False
+    
+  if statusint == POST_ACK:
+    log( 'Data PROCESSED OK\n')
+    # Remove successfully processed entry from the queue
+    #      _get_next_post()
+    
+  elif statusint == POST_INCONSISTENT:
+    log( 'buffer # ' + str( tx_bufcnt ) + ' DATA IS INCONSISTENT!\n' )
+    # Data is inconsistent, ignore it
+    #      _get_next_post()
+    
+  elif statusint == POST_NOT_FOUND:
+    # Collection not found, throw entry out
+    log( 'buffer # ' + str( tx_bufcnt ) + ' USER OR COLLECTION NOT FOUND \n' )
+    #      _get_next_post()
+    
+  elif statusint == POST_INCOMPLETE:
+    log( 'buffer # ' + str( tx_bufcnt ) + ' POST INCOMPLETE \n' )
+    # Post is incomplete, retransmit it
+    retransmit = True
+    
+  else:
+    # Need to see if we want to do this or retransmit some number of times
+    # For right now, we will quit processing buffer on unknown response
+    log( 'buffer # ' + str( tx_bufcnt ) + ' UNKNOWN RESPONSE CODE ' + str(statusint) + ' FROM SERVER, TOSSING BUFFER\n' )
+    #      _get_next_post()
+
+  return retransmit
+
+
+
+# Separate thread that sends buffers on the queue.
+
+def _sendbuffer():
+  tx_bufcnt = 1
+  retxcnt = 0
+#  tx_burstcnt = 0
+  
+  httpheaders = {'Content-Type': 'application/x-www-form-urlencoded'}
+ 
+  while True:
+    log( 'at head of forever loop\n')
+    q_item = _preview_next_post()
+    if ( q_item is None ):
+      log('got nothing to transmit at head of forever loop\n')
+      sleep( TX_INTERVAL_WAIT_TIME )
+      continue
+    
+    # Got data to transmit
+    tx_buf = q_item[1]
+    log('got data to transmit in forever loop\n')
+    
+#    tx_burstcnt = 0
+  
+    while tx_buf is not None:
+
+#    while tx_burstcnt <= MAX_TX_BURST and tx_buf is not None:
+    
+      try:
+        # Increment the burst count
+        # tx_burstcnt += 1
+        
+        # Post it
+        log('attempting to send buffer # '+ str( tx_bufcnt ) + '\n' )
+        log('items on queue (including this one) =  ', _get_queue_sz(), ' \n')
+
+        response = httpretrieve.httpretrieve_open( 'http://sensevis.poly.edu/main/', None, tx_buf, httpheaders, None, timeout=30 )
+        log('buffer # ' + str( tx_bufcnt ) + ' transmitted \n' )
+      
+        # Don't need the file like object
+        response.close()
+    
+      except Exception as e:
+        log( '\n\nStoresense httpretrive_open exception = ' +  repr(e) + '\n\n')
+        continue
+      
+      retransmit = process_reply( response.httpstatus[1], tx_bufcnt )
+
+      if retransmit == True:
+        retxcnt += 1
+        
+      if retxcnt >= MAX_RETRANSMITS  or retransmit == False:
+          # Toss the last buffer transmitted
+          _get_next_post()
+          retxcnt = 0
+          tx_bufcnt += 1
+
+          # See if there is another buffer to transmit
+          q_item = _preview_next_post()
+          if q_item is not None:
+            tx_buf = q_item[1]
+          else:
+            tx_buf = None
+
+    # Got here when queue is empty or burst count met
+    # Go quiescent for time allocated between bursts
+    sleep ( TX_INTERVAL_WAIT_TIME )
+    log('at end of main loop after sleep\n')
+
+
+
+
+def storesense_post( data, device_id, collection, user, priority ):
+  """
+  <Purpose>
+    POSTs sensor data to a website (sensevis.poly.edu) where it
+    can be stored into a database.
+
+  <Arguments>
+    data:
+        A list of sensor data entries (dicts) to be POSTed.
+    collection:
+        The name of the collection the data will be stored into.
+    user:
+        The username of the person owning the specified collection.
+
+  <Exceptions>
+    HttpError 403:
+        Missing permission to access the given collection or the
+        collection does not exist. (The latter is not a 404 error, 
+        as this would potentially expose the existence of private 
+        collections to the public.) 
+    TypeError:
+        The form of the given data is incorrect. 
+            
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    None.
+  """
+  log('in post method\n')
+  
+  post = {'entries':json.dumps(data), 'id':device_id, 'collection':collection, 'user':user}
+  
+  log( '\n(priority, post) = (', priority, post, '), calling _put_post\n\n' )
+  _put_post( priority, post )
+  log( 'returned from _put_post')
+#  _put_post(priority, {'entries':json.dumps(data), 'id':device_id, 'collection':collection, 'user':user})
+  # post = _buildpostdata( data, device_id, collection, user )
+  #_put_post( priority, post )
+
+
+def storesense_timestamp(entry):
+  """
+  <Purpose>
+    Places a timestamp of the current time on the given data entry,
+    prepping the form of the entry for eventual POSTing.
+
+  <Arguments>
+    entry:
+      A dict of sensor data literally just collected, whose keys are
+      the names of your sensors or measurements.  The dict's values 
+      are those of the data collected. 
+      (E.g. entry = {'gps':(49.372, -73.998), 'batteryLevel':74})
+    
+  <Exceptions>
+    TypeError:
+        Raised if 'entry' is not a dict.
+
+  <Side Effects>
+    None.
+
+  <Returns>
+    A dict containing the given entry dict, as well as the (current) 
+    time the sensor data was collected.
+  """
+  return {'time':time.time_getunixtime(), 'sensors':entry}
