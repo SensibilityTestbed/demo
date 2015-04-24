@@ -1,0 +1,40 @@
+"""
+Code to test allpairspingmap.
+
+"""
+
+sensorlib = dy_import_module("sensorlib.r2py")
+pingmap = dy_import_module("allpairspingmap.r2py")
+
+# get a connection to communicate with sensors
+port =  sensorlib.get_connectionport()
+sensor_socket = sensorlib.getconnection(port)
+
+# define sensor/method/arg in code: 
+sensorlib.request_data(sensor_socket, 'startLocating', [])
+
+# try to read current location
+location_data = sensorlib.request_data(sensor_socket, 'readLocation', []) 
+
+# if location was not retrieved, keep trying
+while not location_data:
+  sleep(5)
+  location_data = sensorlib.request_data(sensor_socket, 'readLocation', [])
+
+# wifi must be enabled
+if sensorlib.request_data(sensor_socket, 'checkWifiState', []):
+  # scan for Wifi access pts
+  sensorlib.request_data(sensor_socket, 'wifiStartScan', [])
+  # list of access points found during the most recent Wifi scan 
+  wifi_results = sensorlib.request_data(sensor_socket, 'wifiGetScanResults', [])
+
+mapport = 63103
+# initialize allpairspingmap.r2py
+pingmap.initialize(mapport)
+
+# stop
+request_data(sensor_socket, 'stopLocating', [])
+sensor_socket.close()
+
+
+
