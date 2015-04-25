@@ -1,6 +1,7 @@
 """
 <Program>
   allpairspingmap.r2py
+  Original code: https://github.com/sburnett/seattle/tree/master/repy/apps/allpairspingmap
 
 <Purpose>
   This program gives a visual representation of the vessels that a user has
@@ -103,7 +104,7 @@ def probe_neighbors(port):
 
 
 
-def got_message(srcip,srcport,mess):
+def got_message(socket):
   """
   <Purpose>
     Handle an incoming message from a neighboring node.
@@ -129,6 +130,17 @@ def got_message(srcip,srcport,mess):
   <Returns>
     None
   """
+  srcip = 0 
+  srcport = 0 
+  mess = ""
+
+  while True:
+    try:
+      srcip, srcport, mess = socket.getmessage()
+      if mess != "":
+        break
+    except SocketWouldBlockError:
+      pass
 
   if mess == "ping":
     sendmessage(srcip,srcport,"pong", getmyip(), port)
@@ -447,68 +459,53 @@ def lookup_geoip_info():
       mycontext['locationdata'][neighbor] = None
 
 
+if len(callargs) != 1:
+    raise Exception, "Must specify the port to use"
 
-def initialize(port):
-  """
-  <Purpose>
-    This function handles intializing, since callfunc does not exist in r2py.
+log("starting all pairs ping...\n")
+port = int(callargs[0])
+log("using port number " + str(port) + '\n')
 
-  <Arguments>
-    port: The clearinghouse port assigned to the current user. 
+# this holds the response information (i.e. when nodes responded)
+mycontext['latency'] = {}
 
-  <Side Effects>
-    mycontext fields are initialized
+# this remembers when we sent a probe
+mycontext['sendtime'] = {}
 
-  <Exceptions>
-    None
+# this remembers row data from the other nodes
+mycontext['row'] = {}
 
-  <Returns>
-    None
-  """
+# get the nodes to probe
+mycontext['neighborlist'] = []
+fileobject = openfile("neighboriplist.txt", False)
+filecontent = fileobject.readat(None, 0)
+mycontext['neighborlist'] = filecontent.split('\n')
+log("my neighbors: " + str(mycontext['neighborlist']) + '\n')
 
-  log("in initialize...\n")
-  log("port is " + str(port) + '\n')
 
-  # this holds the response information (i.e. when nodes responded)
-  mycontext['latency'] = {}
+# Contains the dictionaries for node location information.
+mycontext['locationdata'] = {}
 
-  # this remembers when we sent a probe
-  mycontext['sendtime'] = {}
+# Getting geoip data takes a while, in the meanwhile we allow the user to
+# see a status webpage and display a notice there.
+lookup_geoip_info()
 
-  # this remembers row data from the other nodes
-  mycontext['row'] = {}
 
-  # get the nodes to probe
-  mycontext['neighborlist'] = []
-  for line in file("neighboriplist.txt"):
-    mycontext['neighborlist'].append(line.strip())
-
-  # Contains the dictionaries for node location information.
-  mycontext['locationdata'] = {}
-
-  # get local host's ip address 
-  ip = getmyip()
+# get local host's ip address 
+ip = getmyip()
   
-  # call gotmessage whenever receiving a message
-  for neighborip in mycontext["neighborlist"]:
-    udp_socket = listenformessage(ip, port)
-    got_message(udp_socket.getmessage())
-    udp_socket.close()
-    sleep(.5)
+# call gotmessage whenever receiving a message
+for neighborip in mycontext["neighborlist"]:
+  udp_socket = listenformessage(ip, port)
+  got_message(udp_socket)
+  udp_socket.close()
+  sleep(.5)
   
-  # sends a probe message to each neighbor
-  probe_neighbors(port)
+# sends a probe message to each neighbor
+probe_neighbors(port)
 
-  # we want to register a function to show a status webpage (TCP port)
-  for neighborip in mycontext["neighborlist"]:
-    tcp_socket = listenforconnection(ip, port)
-    handle_http_request(tcp_socket.getconnection())
-    tcp_socket.close()
-    sleep(.5)
-
-  # Getting geoip data takes a while, in the meanwhile we allow the user to
-  # see a status webpage and display a notice there.
-  lookup_geoip_info(port)
-
-      
-   
+# we want to register a function to show a status webpage (TCP port)
+pageport = int(callargs[0])
+tcp_socket = listenforconnection(ip, pageport)
+handle_http_request(tcp_socket.getconnection())
+#tcp_socket.close()
