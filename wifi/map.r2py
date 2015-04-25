@@ -1,0 +1,84 @@
+"""Collects wifi/location info and stores in sensevis
+
+See sensevis.poly.edu for stored values.
+
+"""
+
+sensorlib = dy_import_module("sensorlib.r2py")
+#storesense = dy_import_module('storesense.r2py')
+
+log(getmyip(), '\n')
+
+# get a connection to communicate with sensors
+port =  sensorlib.get_connectionport()
+sensor_socket = sensorlib.getconnection(port)
+
+# define sensor/method/arg in code: 
+sensorlib.request_data(sensor_socket, 'startLocating', [])
+
+# try to read current location
+location_data = sensorlib.request_data(sensor_socket, 'readLocation', []) 
+
+# if location was not retrieved, keep trying
+if not location_data:
+  # will try to get location data RETRIES times at most before giving up
+  RETRIES = 8
+  for retry in range(RETRIES):
+    sleep(3)
+    location_data = sensorlib.request_data(sensor_socket, 'readLocation', [])
+    if location_data:
+      break
+  else:
+    log("Could not get location data. Exiting!\n")
+    sensorlib.request_data(sensor_socket, 'stopLocating', [])
+    exitall()
+
+# find out which provider gave the location info
+location = ""
+provider = ""
+providers = ["gps", "network", "passive"]
+for p in providers:
+  try:
+    location = location_data[p]
+    provider = p 
+    break
+  except Exception as e:
+    #log("key exception: " + str(e) + '\n')
+    continue
+
+# get infor we need
+latitude = location["latitude"]
+longitude = location["longitude"]
+accuracy = location["accuracy"]
+log("\nprovider: " + provider + ", latitude: " + str(latitude) + ", longitude: " + str(longitude) + ", accuracy: " + str(accuracy) + '\n\n')
+
+# wifi must be enabled
+if sensorlib.request_data(sensor_socket, 'checkWifiState', []):
+  # scan for wifi access pts
+  #sensorlib.request_data(sensor_socket, 'wifiStartScan', [])
+  # list of access points found during the most recent Wifi scan 
+  wifi_results = sensorlib.request_data(sensor_socket, 'wifiGetConnectionInfo', [])
+
+# get infor we need
+ssid = wifi_results["ssid"]
+speed = wifi_results["link_speed"]  # Mbps
+rssi = wifi_results["rssi"]  # dBm
+log("SSID: " + str(ssid) + ", speed: " + str(speed) + "Mbps, " + "RSSI: " + str(rssi) + "dBm\n")
+
+myfilelist = listfiles()
+filename = "location_wifi"
+
+if filename in myfilelist:
+  removefile(filename)  
+
+myfileobject = openfile(filename, True)
+resultstring = provider + '\t' + str(latitude) + '\t' + str(longitude) + '\t' + str(accuracy) + '\n'
+resultstring = resultstring + str(ssid) + '\t' + str(speed) + '\t' + str(rssi)
+
+myfileobject.writeat(resultstring, 0)
+myfileobject.close()
+
+# stop
+sensorlib.request_data(sensor_socket, 'stopLocating', [])
+sensor_socket.close()
+
