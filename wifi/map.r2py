@@ -1,42 +1,31 @@
 """Collects wifi/location info 
 """
 
-sensorlib = dy_import_module("sensorlib.r2py")
-unicode_scrubber = dy_import_module("unicode_scrubber.r2py")
-
 log(getmyip(), '\n')
 
-# get a connection to communicate with sensors
-port =  sensorlib.get_connectionport()
-sensor_socket = sensorlib.getconnection(port)
-
-# define sensor/method/arg in code: 
-sensorlib.request_data(sensor_socket, 'startLocating', [])
-
 # try to read current location
-location_data = sensorlib.request_data(sensor_socket, 'readLocation', []) 
-
-# if location was not retrieved, keep trying
-if not location_data:
-  # will try to get location data RETRIES times at most before giving up
+try:
+  location_data = get_location()
+except Exception:
+  # after first failure, try another few times
   RETRIES = 5
   for retry in range(RETRIES):
     sleep(2)
-    location_data = sensorlib.request_data(sensor_socket, 'readLocation', [])
-    if location_data:
-      break
+    try:
+      location_data = get_location()
+      break  # got data!
+    except Exception:
+      pass
   else:
-    location_data = sensorlib.request_data(sensor_socket, 'getLastKnownLocation', [])
+    # no data found using get_location()
+    # use get_lastknown_location()
+    try:
+      location_data = get_lastknown_location()
+    except Exception:
+      log("No location data found, exit! :(\n")
+      exitall()
 
-# find out which provider gave the location info
-# location_data is in the form {u'network': {u'bearing': 0, u'altitude': 0, u'time': x, 
-# u'longitude': x, u'provider': u'network', u'latitude': x, u'speed': 0, u'accuracy': x}}
-sensorlib.request_data(sensor_socket, 'stopLocating', []) 
-assert len(location_data.keys()) >= 1   # should return at least one provider
-
-log('Before: ', str(location_data), '\n\n')
-location_data = unicode_scrubber.scrub(location_data)
-log('After: ', str(location_data), '\n\n')
+log(str(location_data), '\n\n')
 
 location = None
 for i in range(len(location_data.keys())):
@@ -55,15 +44,10 @@ accuracy = location["accuracy"]
 #log("\nprovider: " + provider + ", latitude: " + str(latitude) + ", longitude: " + str(longitude) + ", accuracy: " + str(accuracy) + '\n\n')
 
 # wifi must be enabled
-if sensorlib.request_data(sensor_socket, 'checkWifiState', []):
-  # scan for wifi access pts
-  #sensorlib.request_data(sensor_socket, 'wifiStartScan', [])
-  # list of access points found during the most recent Wifi scan 
-  wifi_results = sensorlib.request_data(sensor_socket, 'wifiGetConnectionInfo', [])
+if is_wifi_enabled():
+  wifi_results = get_wifi_connection_info()
 
-log('Before: ', str(wifi_results), '\n\n')
-wifi_results = unicode_scrubber.scrub(wifi_results)
-log('After: ', str(wifi_results), '\n\n')
+log(str(wifi_results), '\n\n')
 
 # get infor we need
 ssid = wifi_results["ssid"]
@@ -78,12 +62,11 @@ if filename in myfilelist:
   removefile(filename)  
 
 myfileobject = openfile(filename, True)
-resultstring = str(provider) + '\t' + str(latitude) + '\t' + str(longitude) + '\t' + str(accuracy) + '\n'
-resultstring = resultstring + str(ssid) + '\t' + str(speed) + '\t' + str(rssi) + '\n'
+resultstring = "['<h2>SSID: " + str(ssid) + "<br>Link speed: " + str(speed) + " Mbps<br>RSSI: " + str(rssi) + " dBm</h2>', "
+#str(provider) + '\t' + str(latitude) + '\t' + str(longitude) + '\t' + str(accuracy) + '\n'
+resultstring = resultstring + str(latitude) + ', ' + str(longitude) + ']'
+#str(ssid) + '\t' + str(speed) + '\t' + str(rssi) + '\n'
 
 myfileobject.writeat(resultstring, 0)
 myfileobject.close()
-
-# stop
-sensor_socket.close()
 
