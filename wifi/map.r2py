@@ -2,16 +2,7 @@
 """
 
 sensorlib = dy_import_module("sensorlib.r2py")
-#storesense = dy_import_module('storesense.r2py')
-
-def scrub_unicode(string):
-  outstring = ""
-  for char in string:
-    if ord(char) <= 128:
-      outstring += char
-    else:
-      outstring += "."
-  return outstring
+unicode_scrubber = dy_import_module("unicode_scrubber.r2py")
 
 log(getmyip(), '\n')
 
@@ -43,7 +34,9 @@ if not location_data:
 sensorlib.request_data(sensor_socket, 'stopLocating', []) 
 assert len(location_data.keys()) >= 1   # should return at least one provider
 
-log(str(location_data), '\n\n')
+log('Before: ', str(location_data), '\n\n')
+location_data = unicode_scrubber.scrub(location_data)
+log('After: ', str(location_data), '\n\n')
 
 location = None
 for i in range(len(location_data.keys())):
@@ -52,12 +45,14 @@ for i in range(len(location_data.keys())):
   if location != None:
     log(str(location), '\n\n')
     break
+else:
+  raise Exception("Could not get location data!\n")
 
 # get infor we need
 latitude = location["latitude"]
 longitude = location["longitude"]
 accuracy = location["accuracy"]
-log("\nprovider: " + provider + ", latitude: " + str(latitude) + ", longitude: " + str(longitude) + ", accuracy: " + str(accuracy) + '\n\n')
+#log("\nprovider: " + provider + ", latitude: " + str(latitude) + ", longitude: " + str(longitude) + ", accuracy: " + str(accuracy) + '\n\n')
 
 # wifi must be enabled
 if sensorlib.request_data(sensor_socket, 'checkWifiState', []):
@@ -66,11 +61,15 @@ if sensorlib.request_data(sensor_socket, 'checkWifiState', []):
   # list of access points found during the most recent Wifi scan 
   wifi_results = sensorlib.request_data(sensor_socket, 'wifiGetConnectionInfo', [])
 
+log('Before: ', str(wifi_results), '\n\n')
+wifi_results = unicode_scrubber.scrub(wifi_results)
+log('After: ', str(wifi_results), '\n\n')
+
 # get infor we need
-ssid = scrub_unicode(wifi_results["ssid"])
+ssid = wifi_results["ssid"]
 speed = wifi_results["link_speed"]  # Mbps
 rssi = wifi_results["rssi"]  # dBm
-log("SSID: " + str(ssid) + ", speed: " + str(speed) + "Mbps, " + "RSSI: " + str(rssi) + "dBm\n")
+#log("SSID: " + str(ssid) + ", speed: " + str(speed) + "Mbps, " + "RSSI: " + str(rssi) + "dBm\n")
 
 myfilelist = listfiles()
 filename = "location_wifi"
@@ -79,7 +78,7 @@ if filename in myfilelist:
   removefile(filename)  
 
 myfileobject = openfile(filename, True)
-resultstring = provider + '\t' + str(latitude) + '\t' + str(longitude) + '\t' + str(accuracy) + '\n'
+resultstring = str(provider) + '\t' + str(latitude) + '\t' + str(longitude) + '\t' + str(accuracy) + '\n'
 resultstring = resultstring + str(ssid) + '\t' + str(speed) + '\t' + str(rssi) + '\n'
 
 myfileobject.writeat(resultstring, 0)
