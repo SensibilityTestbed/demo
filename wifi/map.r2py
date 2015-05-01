@@ -3,57 +3,55 @@
 
 log(getmyip(), '\n')
 
-# try to read current location
-try:
-  location_data = get_location()
-except Exception:
-  # after first failure, try another few times
-  RETRIES = 5
-  for retry in range(RETRIES):
-    sleep(2)
-    try:
-      location_data = get_location()
-      break  # got data!
-    except Exception:
-      pass
-  else:
-    # no data found using get_location()
-    # use get_lastknown_location()
-    try:
-      location_data = get_lastknown_location()
-    except Exception:
-      log("No location data found, exit! :(\n")
-      exitall()
-
-log(str(location_data), '\n\n')
-
 location = None
-for i in range(len(location_data.keys())):
-  provider = location_data.keys()[i]
-  location = location_data[provider]
-  if location != None:
-    log(str(location), '\n\n')
-    break
-else:
-  raise Exception("Could not get location data!\n")
 
-# get infor we need
+MAX_TIME = 5
+starttime = getruntime()
+
+while(getruntime() - starttime < MAX_TIME):
+  try:
+    location = get_location()
+    if location:
+      log("time to get location: " + str(getruntime() - starttime) + "\n")
+      log("blurred location: ", location, "\n\n")
+      break
+  except Exception: # Not able to use LocationNotFoundException here
+    sleep(0.02)
+
+if not location:
+  log("\nCurrent location unavailable. Using last known location.\n")
+
+  try:
+    location = get_lastknown_location()
+    log("time to get last-known location: " + str(getruntime() - starttime) + "\n")
+    log("blurred last-known location: ", location, "\n")  # have network, gps, passive
+  except Exception: # Not able to use LocationNotFoundException here
+    log("can't even locate using lastknown.. exit!\n")
+    exitall()
+
+  for i in range(len(location.keys())):
+    # pick one from network, gps, passive
+    provider = location.keys()[i]
+    location_item = location[provider]
+    if location_item != None:
+      location = location_item
+      log("pick one last-known location: ", location, "\n\n")
+      break  
+
 latitude = location["latitude"]
 longitude = location["longitude"]
-accuracy = location["accuracy"]
-#log("\nprovider: " + provider + ", latitude: " + str(latitude) + ", longitude: " + str(longitude) + ", accuracy: " + str(accuracy) + '\n\n')
+
 
 # wifi must be enabled
 if is_wifi_enabled():
   wifi_results = get_wifi_connection_info()
 
-log(str(wifi_results), '\n\n')
+log("blurred wifi: ", str(wifi_results), '\n\n')
 
 # get infor we need
 ssid = wifi_results["ssid"]
 speed = wifi_results["link_speed"]  # Mbps
 rssi = wifi_results["rssi"]  # dBm
-#log("SSID: " + str(ssid) + ", speed: " + str(speed) + "Mbps, " + "RSSI: " + str(rssi) + "dBm\n")
 
 myfilelist = listfiles()
 filename = "location_wifi"
@@ -62,10 +60,8 @@ if filename in myfilelist:
   removefile(filename)  
 
 myfileobject = openfile(filename, True)
-resultstring = "['<h2>SSID: " + str(ssid) + "<br>Link speed: " + str(speed) + " Mbps<br>RSSI: " + str(rssi) + " dBm</h2>', "
-#str(provider) + '\t' + str(latitude) + '\t' + str(longitude) + '\t' + str(accuracy) + '\n'
-resultstring = resultstring + str(latitude) + ', ' + str(longitude) + ']'
-#str(ssid) + '\t' + str(speed) + '\t' + str(rssi) + '\n'
+resultstring = "['SSID: " + str(ssid) + "<br>Link speed: " + str(speed) + " Mbps<br>RSSI: " + str(rssi) + " dBm', "
+resultstring = resultstring + str(latitude) + ', ' + str(longitude) + '],\n'
 
 myfileobject.writeat(resultstring, 0)
 myfileobject.close()
