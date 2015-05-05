@@ -18,23 +18,15 @@ import subprocess
 outfilename = "./index.html"
 
 # initialize credentials, load all devices
-command_list = [ 
-  'loadkeys hackathon', 
-  'as hackathon', 
-  'browse',
-]
-
-try:
-  seash.command_loop(command_list)
-except seash_exceptions.UserError, e:
-  print "first group of commands fail\n", str(e)
-
 # running commands, download collected data
 while True:
   command_list = [ 
+  'loadkeys hackathon', 
+  'as hackathon', 
+  'browse',
   'on browsegood',
   'stop',
-  'start dylink.r2py encasementlib.r2py sensor_layer.r2py blur_wifi.r2py map.r2py',
+  'start dylink.r2py encasementlib.r2py sensor_layer.r2py map.r2py',
   ]
   try:
     seash.command_loop(command_list)
@@ -51,7 +43,7 @@ while True:
     seash.command_loop(command_list)
   except seash_exceptions.UserError, e:
     print "download fail\n", str(e)
-
+    
   proc = subprocess.Popen('ls -l location_wifi.*', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   print proc.communicate()[0]
 
