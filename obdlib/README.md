@@ -18,7 +18,9 @@ port = get_connectionport()
 sensorsocket = getconnection(port)
 setSensorPort(port)
 
-local_port = 63100 # any local port you wish
+local_port = 63100 
+
+filename = "my_trip.txt" # file name to write obd data to
 
 # Use the customSetup() function in obdlib.r2py to set obd 
 # sensor's ip, port, and localport.
@@ -37,8 +39,7 @@ while counter<60:
   log("\nStatus: ",request_data(sensorsocket,'toggleWifiState',[]))
   sleep(5) # Give phone time to accomplish this.
 
-# Read filename (my_trip.txt) and save into string r.
-file = openfile("my_trip.txt", True)
+file = openfile(filename, True)
 car_data = file.readat(None, 0)
 file.close()
 
