@@ -1,0 +1,36 @@
+MAX_TIME = 5
+starttime = getruntime()
+location = None
+
+while(getruntime() - starttime < MAX_TIME):
+  try:
+    location = get_location()
+    if location:
+      break
+  except Exception: 
+    sleep(0.02)
+
+if not location:
+  try:
+    location = get_lastknown_location()
+  except Exception: 
+    log("can't locate using get_lastknown_location().. exit!\n")
+    exitall()
+
+log(location, '\n')
+
+for i in range(len(location.keys())):
+    # pick one from network, gps, passive
+    provider = location.keys()[i]
+    location_item = location[provider]
+    if location_item != None:
+      location = location_item
+      log("\npick one last-known location: ", location, "\n\n")
+      break 
+
+latitude = location["latitude"]
+longitude = location["longitude"]
+log(latitude, ', ', longitude, '\n')
+
+address = get_geolocation(latitude, longitude, 1) 
+log("\naddress: ", address)

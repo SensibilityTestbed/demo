@@ -1,0 +1,9 @@
+start_sensing(1, 0)
+
+ITER = 100
+
+for j in xrange(ITER):
+  data = get_acceleration()
+  log(data, '\n')
+
+stop_sensing()
