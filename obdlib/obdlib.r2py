@@ -1,0 +1,456 @@
+"""
+<Program>
+  obdlib.repy 
+  
+<Date Started>
+  June 26th, 2014
+    
+<Author>
+  Mike Reininger, NYU-Poly, USA
+
+<Purpose>
+  An On-Board Diagnostics (OBD) library for collecting vehicular sensor data.
+  This script also manages the vehicular sensor data formatting and calculating,
+  as well as saving that data to a file so that one may back haul it
+  to a server or database.
+
+<Usage/Help>
+  OBD-II ELM327 sensors can be used to communicate between a car's engine
+  control unit (ECU), also known as the car's sensor data network, and a 
+  computer or smartphone. The sensor can be purchased online 
+  (suggested model: http://amzn.com/B00AOIM2CC). It is recommended that you 
+  install a SIM card into your Android, thus allowing for vehicular sensor
+  data to be back hauled and shared while driving.
+  
+  OBD-II communication protocol utilizes hexadecimal parameter ids (PIDs), 
+  which allow for the OBD sensor to communicate with the Android smartphone.
+  For a particular PID, please see the chart at 
+  http://en.wikipedia.org/wiki/OBD-II_PIDs .
+  
+  obdlib is capable of converting any PID to its decimal format, so that the
+  output is human readable. See humanize_sensor_data for details.
+  
+  How to connect to the OBD on the Android:
+  1. Plug the device into the OBD port under the steering wheel. 
+  2. Navigate to your Android's settings --> wireless settings --> connect to 
+  wifi router.
+  3. Choose WiFi_OBDii.
+
+"""
+# Imports sensorlib for GPS, deviceID, and time (from GPS sensor value).
+dy_import_module_symbols("sensorlib.r2py")
+dy_import_module_symbols("time.r2py")
+
+"""
+<Purpose>
+  Insert any PID and referable description in the dictionary below.
+"""
+pids = {
+  'speed':'01 0D\r',
+  'rpm':'01 0C\r',
+  'maf':'01 10\r',
+  'fuel pressure':'01 0A\r',
+  'distance traveled with MIL':'01 21\r',
+  'barometric pressure':'01 33\r',
+  'throttle position':'01 11\r',
+  'fuel level':'01 2F\r'
+}
+
+#===============================================================================
+# Vehicular sensor data retrieval functions from the OBD using PIDs.
+#===============================================================================
+
+ 
+def write_obd_data_to_file(filename):
+  """
+  <Purpose>
+    Writes speed, RPM, MAF, GPS location, and current time to a file.
+    
+    Procedure:
+    1. Create a socket with the OBD-II sensor given the OBDIP, OBDPort, and 
+    localport.
+    2. Receive 60 data entries from the car and store them into the mydataarr.
+    3. Append mydataarr to a text file (filename).
+    4. Close the socket to the OBD-II sensor.
+    
+  <Arguments>  
+    filename: Filename to write to.
+    
+  <Returns>
+    None.
+  """
+  # Create a connection with the obd sensor.
+  socketobject = openconnection(mycontext['OBDIP'],mycontext['OBDPort'],getmyip(),int(mycontext['localport']),30000)
+  log("\nSending...\n")
+  output = [] # Array that stores the vehicular sensor data in hex format. 
+  mydataarr = [] # Array that stores the human readable sensor data.
+  # Then we append the output (in str(hex)) to the array: output.
+  socketobject.send(pids['speed']) 
+  socketobject.send(pids['rpm']) 
+  socketobject.send(pids['maf'])
+  data = socketobject.recv(100)
+  time = getCurrentTime()
+  location = getCurrentLocation() 
+  output.append(str(data))  # Append every sensor value in it's hex form to the array output.
+  # Replaces excess chars returned from our communication. Stores in finalized array.
+  finalized = str(data).replace("\r", "").replace("\n","").replace(">",";") 
+  finalized = finalized[:-1]  
+  entry_array = finalized.split(";") # Split each sensor value by the semicolon.
+  entry_array.append(str(location)) # Append the current location into entry_array.
+  entry_array.append(str(time)) # Append entry_array with the current time.
+  # Append entry_array with the human readable version of the sensor data.
+  mydataarr.append(humanize_sensor_data(entry_array), time, location) 
+  # Appends sensor data to filename.  
+  f = openfile(filename, True)
+  r = f.readat(None, 0)
+  f.writeat(str(mydataarr)+str(r),0)
+  f.close()
+  
+  # Close the socket AFTER receiving data.
+  socketobject.close()
+
+
+def humanize_sensor_data(response, time, location):
+  """
+  <Purpose>
+    Uses the response array to create a JSONified array of id, time, and 
+    sensors.
+    
+  <Arguments>
+    response: Response array from OBD sensor.
+    time: Time of the sensor event.
+    location: Current GPS location of the device at the time of sensor data 
+    reading.
+    
+  <Returns>
+    my_data_dict: A dictionary array containing the stringified JSON sensor
+    array.
+  """
+  
+  speed = ""
+  rpm = ""
+  maf = ""
+  for v in response:
+    cmd = response[3:5]
+    if cmd == '0D': # Speed
+      speed = toDecimal(v[11:13])
+      return speed
+    elif cmd == '0C': # RPM
+      a = toDecimal(v[10:13])
+      b = toDecimal(v[14:16])
+      rpm = calculateRPM(a,b)
+      return rpm
+    elif cmd == '10': # MAF
+      a = toDecimal(v[10:13])
+      b = toDecimal(v[14:16])
+      maf = calculateMAF(a,b)
+      return maf
+    else:
+      return None
+  my_data_dict = {"id":str(deviceID()), "time":str(time), "sensors":{"speed":speed, "rpm":rpm, "maf":maf, "gps":location}}
+  return str(my_data_dict) 
+
+
+def calculateRPM(a,b):
+  """
+  <Purpose>
+    Returns vehicular RPM. Since RPM data is sent to the Android in increments 
+    of 1/4 RPM, we divide the sensor value by 4 to obtain the real RPM
+    (according to: http://elmelectronics.com/DSheets/ELM327DS.pdf)
+    Also, 2 byte hex data, like RPM, needs to be processed into a formula
+    (given by the PID chart at: 
+    http://en.wikipedia.org/wiki/OBD-II_PIDs#Mode_1_PID_12) 
+    in order for RPM to be calculated. For instance, if the RPM data returned 
+    is:
+    
+      41 0C 0F A0
+    then... we must omit 41 and 0C, because they are headers refering to the 
+    requested sensor data (41 being response code, 0C being RPM indicator).
+      0F A0
+    then...
+      set a = toDecimal('0F')   --> 15
+      set b = toDecimal('A0')   --> 160
+    finally...
+      RPM = ((a*256)+b)/4 = 1000
+        
+  <Arguments>
+    None.
+
+  <Returns>
+    The decimal value of the car's RPM.    
+  """
+  calculation = ((a*256)+b)/4
+  return calculation
+    
+def calculateMAF(a,b):
+  """
+  <Purpose>
+    Returns vehicular MAF. We must also use the formula posted on the wikipedia 
+    chart link in getRPM() above in order to calculate the MAF.
+    This value is very useful when calculating the instantaneous fuel economy 
+    of the car.
+    
+  <Arguments>
+    None.
+
+  <Returns>
+    The decimal value of the car's MAF.    
+  """
+  calculation = ((a*256)+b)/100
+  return calculation
+    
+def calculateFuelPressure(a):
+  """
+  <Purpose>
+    Returns car's fuel pressure in kPa. We must also use the formula posted on 
+    the wikipedia chart link in getRPM() above in order to calculate the 
+    fuel pressure.
+
+  <Arguments>
+    None.
+
+  <Returns>
+    The decimal value of the car's fuel pressure.
+        
+  """
+  return a*3
+
+def calculateDistanceTraveledWithMIL(a,b):
+  """
+  <Purpose>
+    Returns the distance traveled in km with the "check engine light" on. 
+    We must also use the formula posted on the wikipedia table link in getRPM() 
+    above in order to calculate the exact timing of this incident. 
+    Range is 0 - 65535 km.
+    
+  <Arguments>
+    None.    
+
+  <Returns>
+    The decimal value of the distance traveled with the "check engine light"
+    on in km.
+  """  
+  return (a*256)+b
+
+def calculateThrottlePosition(a,b):
+  """
+  <Purpose>
+    Returns the throttle position, or how much the accelerator position is 
+    depressed on a scale of 0 - 100 %.
+
+  <Arguments>
+    None.
+
+  <Returns>
+    The decimal vlaue of the throttle position in percent.    
+  """
+
+  return a*100/255 
+
+def calculateFuelLevel(a):
+  """
+  <Purpose>
+    Returns the car's fuel level on a scale of 0 - 100 %.
+
+  <Arguments>
+    None.
+
+  <Returns>
+    The decimal value of the fuel level input in percent. 
+  """
+  return a*100/255
+  
+def calculateFuelConsumption(speed,maf):
+  """
+  <Purpose>
+    Returns instantaneous fuel consumption in MPG using the formula posted here:
+    http://www.lightner.net/lightner/bruce/Lightner-183.pdf with MAF and VSS.
+
+  <Arguments>
+    speed: speed in kph.
+    maf: mass air flow rate.
+    
+  <Returns>
+    The instantaneous fuel consumption in decimal mpg.    
+  """
+  return 710.7 * speed/maf
+  
+def getCurrentLocation():
+  """
+  <Purpose>
+    Returns the Android's gps current location.
+
+  <Arguments>
+    None.
+
+  <Returns>
+    sensor_data: the phone's current GPS data.    
+  """
+
+  request_data(mycontext['sensor_socket'], 'startLocating', [])
+  # Loop GPS querying until we get a valid response. 
+  # The loop will break once SL4A returns a response that should start with 
+  # {u'network' ... .
+  while True:
+    try:
+      sensor_data = request_data(mycontext['sensor_socket'], 'readLocation', []) 
+      if str(sensor_data).startswith("{u'network'"):
+        break
+    except Exception as e:
+      request_data(mycontext['sensor_socket'], 'stopSensing', []) 
+      mycontext['sensor_socket'].close()
+      
+  del sensor_data['network']['provider']
+  del sensor_data['network']['time']
+  return sensor_data
+
+
+#===============================================================================
+# obdlib.repy added functions for converting speed units and initialization.
+#===============================================================================
+
+def toDecimal(data):
+  """
+  <Purpose>
+    To convert hex data into decimal.
+
+  <Arguments>
+    data: The hex data that needs converting. 
+
+  <Returns>
+    An integer conversion from hex to decimal.       
+  """
+  return int(data, 16)
+
+
+def toMPH(k):
+  """
+  <Purpose>
+    To convert KPH to MPH.
+
+  <Arguments>
+    k: The speed in kph that will be converted to mph.
+
+  <Returns>
+    A float conversion from kph to mph.  
+  """
+  return float(k)/1.609344
+
+
+def setOBDIP(ip):
+  """
+  <Purpose>
+    Sets the OBD sensor/simulator IP. If none is specified, the default IP
+    (the IP programmed into the OBD sensor during its manufacture), 
+    192.168.0.10, is chosen.
+
+  <Arguments>
+    ip: The OBD sensor/simulator IP address chosen to connect to.
+
+  <Returns>
+    None.   
+  """
+  if ip==None:
+    mycontext['OBDIP'] = '192.168.0.10'
+  else:
+    mycontext['OBDIP'] = ip
+
+def setOBDPort(port):
+  """
+  <Purpose>
+    Sets the OBD sensor/simulator port. If none is specified, the default port
+    (the port programmed into the OBD sensor during its manufacture), 35000, is
+    chosen.
+
+  <Arguments>
+    port: The OBD sensor/simulator port chosen to connect to.
+
+  <Returns>
+    None.    
+  """
+  if port==None:
+    mycontext['OBDPort'] = 35000
+  else:
+    mycontext['OBDPort'] = port   
+    
+def defaultSetup():
+  """
+  <Purpose>
+    Runs default setup using pre-programmed OBD ip and port connection values.
+    For example, the ELM327 wifi obd-ii sensor is programmed by the manufacturer
+    to use ip address: 192.168.0.10, and port 35000.
+    
+    This calls setOBDIP and setOBDPort, which then saves the ip and port to 
+    their respective mycontext.
+    
+  <Arguments>
+    None.
+
+  <Returns>
+    None.  
+  """
+  setOBDIP('192.168.0.10')
+  setOBDPort(35000)
+
+def customSetup(ip,port, returnPort):
+  """
+  <Purpose>
+    Runs custom setup using custom OBD ip and port connection values.
+    
+  <Arguments>
+    ip: OBD sensor/simulator IP.
+    port: OBD sensor/simulator port.
+    
+  <Returns>
+    None.
+  """
+  setOBDIP(ip)
+  setOBDPort(int(port))
+  mycontext['localport'] = returnPort
+
+def setSensorPort(port):
+  """
+  <Purpose>
+    Allows developer to select which SL4A port they wish
+    to use to communicate with the Android's sensors.
+
+  <Arguments>
+    port: The port value for SL4A.
+
+  <Returns>
+    None.    
+  """
+  mycontext['sensor_port'] = port
+  mycontext['sensor_socket'] = getconnection(mycontext['sensor_port'])
+
+def getCurrentTime():
+  """
+  <Purpose>
+    Uses GPS data from sensorlib.r2py to retrieve current time in UTC-epoch.
+    Helpful website for converting epoch to "human-readable" time:
+    http://www.epochconverter.com/
+    
+  <Arguments> 
+    None.
+    
+  <Returns>
+    Current time in UTC-epoch.
+  """
+  return time_getunixtime()
+
+def deviceID():
+  """
+  <Purpose>
+    Uses sensorlib.r2py to retrieve the Android's SIM card unique subscriber id.
+    "Returns the unique subscriber ID, for example, the IMSI for a GSM phone. 
+    Return null if it is unavailable." - SL4A API documentation.
+     
+  <Arguments>
+    None.
+  
+  <Returns>
+    uid: subscriber id.
+    null: if no subscriber id is available.
+  """
+  uid = request_data(mycontext['sensor_socket'], 'getSubscriberId', [])
+  return uids
