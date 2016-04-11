@@ -25,7 +25,7 @@ for i in range(len(location.keys())):
     location_item = location[provider]
     if location_item != None:
       location = location_item
-      log("\npick one last-known location: ", location, "\n\n")
+      log("\npick one location from provider: ", location, "\n\n")
       break 
 
 latitude = location["latitude"]
